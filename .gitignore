@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+
+# Environment variables
+.env
+.env.local
+
+# IDEs
+.vscode/
+.idea/
+.DS_Store
+
+# Infrastructure & Data
+.terraform/
+*.tfstate
+*.tfstate.backup
+/data/
+qdrant_storage/
