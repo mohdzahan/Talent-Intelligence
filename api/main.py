@@ -2,58 +2,60 @@ from fastapi import FastAPI
 from pydantic import BaseModel, Field
 from typing import List
 from sentence_transformers import SentenceTransformer
-import numpy as np
+from qdrant_client import AsyncQdrantClient
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
+import os
 
+app = FastAPI(title="Enterprise Talent Intelligence API")
+executor = ThreadPoolExecutor(max_workers=2)
 
+# 1. Initialize globals: the model (CPU-heavy) and the async database client (Network I/O)
+model = SentenceTransformer("BAAI/bge-m3")
 
-app = FastAPI(title="Talent Intellignence Platform")
+# ...
+# Allow Docker to override the Qdrant host
+QDRANT_HOST = os.getenv("QDRANT_HOST", "localhost")
+qdrant = AsyncQdrantClient(QDRANT_HOST, port=6333)
 
-executor = ThreadPoolExecutor(max_workers=4)
+class SearchRequest(BaseModel):
+    query: str = Field(..., min_length=1, description="The search string (e.g., a job description)")
+    limit: int = Field(default=5, ge=1, le=50, description="How many CVs to retrieve")
 
-
-class EmbedRequest(BaseModel):
-    texts: List[str] = Field(...,min_length=1, description="List of strings to embed")
-
-class EmbedResponse(BaseModel):
-    embeddings: List[List[float]]
-
-class SimilarityRequest(BaseModel):
-    text1: str = Field(...,min_length = 1)
-    text2: str = Field(...,min_length=1)
-
-class SimilarityResponse(BaseModel):
+class SearchResult(BaseModel):
     score: float
+    text: str
+    document_type: str
 
+class SearchResponse(BaseModel):
+    results: List[SearchResult]
 
-model = SentenceTransformer("all-MiniLM-L6-v2")
-
-@app.post("/embed", response_model=EmbedResponse)
-async def embed_texts(request:EmbedRequest):
+@app.post("/search", response_model=SearchResponse)
+async def search_documents(request: SearchRequest):
     loop = asyncio.get_running_loop()
-
+    
+    # 2. Offload the blocking CPU math to the threadpool
     def blocking_embed():
-        return model.encode(request.texts).tolist()
+        return model.encode(request.query).tolist()
+        
+    query_vector = await loop.run_in_executor(executor, blocking_embed)
     
-    embeddings = await loop.run_in_executor(executor, blocking_embed)
-    return EmbedResponse(embeddings = embeddings)    
+    # 3. Await the async network call to Qdrant using the modern API
+    search_response = await qdrant.query_points(
+        collection_name=COLLECTION_NAME,
+        query=query_vector,
+        limit=request.limit,
+        with_payload=True
+    )
 
-@app.post("/similarity",response_model=SimilarityResponse)
-
-async def compute_similarity(request: SimilarityRequest):
-    loop = asyncio.get_running_loop()
+    # 4. Extract the payload data we injected during indexing
+    formatted_results = [
+        SearchResult(
+            score=hit.score,
+            text=hit.payload.get("text", ""),
+            document_type=hit.payload.get("document_type", "unknown")
+        )
+        for hit in search_response.points
+    ]
     
-    def blocking_encode_and_score():
-        vec1 = model.encode([request.text1])[0]
-        vec2 = model.encode([request.text2])[0]
-
-        dot_product = np.dot(vec1, vec2)
-        norm1 = np.linalg.norm(vec1)
-        norm2 = np.linalg.norm(vec2)
-
-
-        return 0.0 if norm1==0 or norm2==0 else dot_product/(norm1*norm2)
-
-    score = await loop.run_in_executor(executor, blocking_encode_and_score)
-    return SimilarityResponse(score=float(score))
+    return SearchResponse(results=formatted_results)

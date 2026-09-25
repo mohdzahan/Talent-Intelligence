@@ -16,19 +16,14 @@ def initialize_and_index():
     client.create_collection(
         collection_name=collection_name,
         vectors_config=VectorParams(
-            size=384,  # all-MiniLM-L6-v2 outputs 384 dimensions. (BGE-M3 will require 1024)
+            size=1024,  # BGE-M3 requires 1024 dimensions
             distance=Distance.COSINE
         ),
-        # Defining the indexing algorithm constraints
-        hnsw_config=HnswConfigDiff(
-            m=16,               # Number of edges per node. 16 is standard.
-            ef_construct=100    # Higher = slower indexing, but more accurate queries.
-        )
+        hnsw_config=HnswConfigDiff(m=16, ef_construct=100)
     )
-    print(f"Collection '{collection_name}' created successfully.")
 
-    # 4. Load the model and embed sample CV data
-    model = SentenceTransformer("all-MiniLM-L6-v2")
+    # Change the model instantiation
+    model = SentenceTransformer("BAAI/bge-m3")
     
     cv_texts = [
         "Data Engineer with 13 months of experience building pipelines in PySpark and Delta Lake.",
