@@ -1,11 +1,14 @@
 import uuid
+import os
 from qdrant_client import QdrantClient
 from qdrant_client.http.models import Distance, VectorParams, HnswConfigDiff, PointStruct
 from sentence_transformers import SentenceTransformer
 
 def initialize_and_index():
     # 1. Connect to local Qdrant
-    client = QdrantClient("localhost", port=6333)
+
+    qdrant_host = os.getenv("QDRANT_HOST", "localhost")
+    client = QdrantClient(host=qdrant_host, port=6333)
     collection_name = "talent_intelligence_cvs"
 
     # 2. Recreate collection to ensure a clean slate during testing

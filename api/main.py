@@ -1,22 +1,20 @@
-from fastapi import FastAPI
-from pydantic import BaseModel, Field
-from typing import List
-from sentence_transformers import SentenceTransformer
-from qdrant_client import AsyncQdrantClient
+import os
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
-import os
+from typing import List
+from fastapi import FastAPI
+from pydantic import BaseModel, Field
+from sentence_transformers import SentenceTransformer
+from qdrant_client import AsyncQdrantClient
 
 app = FastAPI(title="Enterprise Talent Intelligence API")
 executor = ThreadPoolExecutor(max_workers=2)
 
-# 1. Initialize globals: the model (CPU-heavy) and the async database client (Network I/O)
+# Globals
 model = SentenceTransformer("BAAI/bge-m3")
-
-# ...
-# Allow Docker to override the Qdrant host
-QDRANT_HOST = os.getenv("QDRANT_HOST", "localhost")
-qdrant = AsyncQdrantClient(QDRANT_HOST, port=6333)
+QDRANT_HOST = os.getenv("QDRANT_HOST", "qdrant")
+qdrant = AsyncQdrantClient(host=QDRANT_HOST, port=6333)
+COLLECTION_NAME = "talent_intelligence_cvs"
 
 class SearchRequest(BaseModel):
     query: str = Field(..., min_length=1, description="The search string (e.g., a job description)")
