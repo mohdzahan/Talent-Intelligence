@@ -5,29 +5,33 @@ An asynchronous, two-stage semantic retrieval and recruiter evaluation microserv
 
 ## System Architecture
 
-[ Recruiter Query ]
-│
-▼
-[ FastAPI Gateway (/search) ] ── (Async Event Loop)
-│
-├──> [ ThreadPoolExecutor ]
-│         ├── Dense Embeddings: BAAI/bge-m3 (1024-d)
-│         └── Sparse Vectors: FastEmbed (BM25)
-│
-▼
-[ Qdrant Vector DB ]
-│
-├── Stage 1: Reciprocal Rank Fusion (RRF) over HNSW Graph
-│
-▼ (Top-K Prefetched Candidates)
-[ Cross-Encoder Stage ]
-│
-├── BAAI/bge-reranker-base (Joint Attention Scoring)
-│
-▼ (Filtered & Calibrated Scores)
-[ Recruiter Agent (LLM) ]
-│
-└── Structured Pydantic Output (Scorecards, Evidence, Decision)
+```mermaid
+flowchart TD
+    classDef client fill:#1e293b,stroke:#3b82f6,stroke-width:2px,color:#fff;
+    classDef gateway fill:#0f172a,stroke:#64748b,stroke-width:1.5px,color:#fff;
+    classDef compute fill:#1e1e38,stroke:#8b5cf6,stroke-width:1.5px,color:#fff;
+    classDef storage fill:#132e2b,stroke:#10b981,stroke-width:2px,color:#fff;
+    classDef ai fill:#311b22,stroke:#f43f5e,stroke-width:1.5px,color:#fff;
+
+    User([Recruiter / Client Query]):::client --> Gateway[FastAPI Gateway: /search]:::gateway
+    
+    subgraph Execution ["Asynchronous Offload"]
+        Gateway -->|Non-blocking Event Loop| Pool[ThreadPoolExecutor]:::compute
+        Pool --> Dense[BAAI/bge-m3: 1024-d Dense Vector]:::compute
+        Pool --> Sparse[FastEmbed: BM25 Sparse Vector]:::compute
+    end
+
+    Dense & Sparse -->|Multi-Vector Payload| Qdrant[(Qdrant Vector DB: HNSW Index)]:::storage
+    
+    subgraph TwoStage ["Two-Stage Hybrid Retrieval & Evaluation"]
+        Qdrant -->|Stage 1: Reciprocal Rank Fusion| Prefetch[Prefetched Top-K Candidates]:::storage
+        Prefetch --> CrossEncoder[Stage 2: BAAI/bge-reranker-base]:::compute
+        CrossEncoder -->|Calibrated Logit Filtering| Agent[Recruiter Agent: LLM Engine]:::ai
+        Agent --> Output[Structured Pydantic Scorecard]:::ai
+    end
+
+    Output -.->|Validated JSON Response| User
+```
 
 
 ## Technical Highlights
