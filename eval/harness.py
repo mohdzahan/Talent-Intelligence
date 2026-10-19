@@ -33,7 +33,7 @@ BENCHMARK_CASES = [
     }
 ]
 
-async def execute_query(client: httpx.AsyncClient, query: str, rerank: bool, limit: int = 2):
+async def execute_query(client: httpx.AsyncClient, query: str, rerank: bool, limit: int = 5):
     start = time.perf_counter()
     response = await client.post(
         TALENT_API_URL,

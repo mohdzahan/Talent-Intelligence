@@ -1,5 +1,6 @@
 import os
 import asyncio
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from typing import List
 from fastapi import FastAPI
@@ -7,6 +8,7 @@ from pydantic import BaseModel, Field
 from sentence_transformers import SentenceTransformer, CrossEncoder
 from fastembed import SparseTextEmbedding
 from qdrant_client import AsyncQdrantClient, models
+
 
 app = FastAPI(title="Enterprise Talent Intelligence API (Hybrid + Reranker)")
 executor = ThreadPoolExecutor(max_workers=2)
@@ -46,8 +48,9 @@ async def search_documents(request: SearchRequest):
 
     dense_vector, sparse_vector = await loop.run_in_executor(executor, generate_embeddings)
 
-    # 2. Stage 1: Hybrid Retrieval with Qdrant RRF (pull 2x the requested limit)
-    fetch_limit = request.limit * 2 if request.rerank else request.limit
+    # 1. Widen prefetch: Always pull 20 candidates from Qdrant regardless of requested limit
+    fetch_limit = 20 if request.rerank else request.limit
+    
     search_response = await qdrant.query_points(
         collection_name=COLLECTION_NAME,
         prefetch=[
@@ -80,10 +83,11 @@ async def search_documents(request: SearchRequest):
         for hit in search_response.points
     ]
 
-    # 3. Stage 2: Cross-Encoder Reranking
+    # 2. Stage 2: Fast Cross-Encoder Reranking (Truncate to 512 chars for latency optimization)
     if request.rerank and candidates:
         def compute_rerank():
-            pairs = [[request.query, c["text"]] for c in candidates]
+            # Truncating candidate text to 512 characters prevents quadratic transformer attention lag on CPU
+            pairs = [[request.query, c["text"][:512]] for c in candidates]
             rerank_scores = reranker.predict(pairs)
             return rerank_scores
 
@@ -91,9 +95,62 @@ async def search_documents(request: SearchRequest):
         for i, score in enumerate(scores):
             candidates[i]["score"] = float(score)
 
-        # Sort descending by cross-encoder score and slice to requested limit
+        # Sort descending by cross-encoder score and slice to user requested limit
         candidates.sort(key=lambda x: x["score"], reverse=True)
         candidates = candidates[:request.limit]
 
     formatted_results = [SearchResult(**c) for c in candidates]
     return SearchResponse(results=formatted_results)
+
+
+class IngestRequest(BaseModel):
+    text: str = Field(..., min_length=10, description="Full CV text content")
+    document_type: str = Field(default="CV", description="Type of document")
+    skills: List[str] = Field(default=[], description="Explicitly tagged skills")
+
+class IngestResponse(BaseModel):
+    status: str
+    point_id: str
+    message: str
+
+@app.post("/ingest", response_model=IngestResponse)
+async def ingest_document(request: IngestRequest):
+    loop = asyncio.get_running_loop()
+
+    # 1. Offload vectorization to ThreadPool
+    def generate_embeddings():
+        d_vec = dense_model.encode(request.text).tolist()
+        s_vec = list(sparse_model.embed([request.text]))[0]
+        return d_vec, s_vec
+
+    dense_vector, sparse_vector = await loop.run_in_executor(executor, generate_embeddings)
+
+    point_id = str(uuid.uuid4())
+
+    # 2. Upsert into Qdrant
+    await qdrant.upsert(
+        collection_name=COLLECTION_NAME,
+        points=[
+            models.PointStruct(
+                id=point_id,
+                vector={
+                    "dense": dense_vector,
+                    "sparse": models.SparseVector(
+                        indices=sparse_vector.indices.tolist(),
+                        values=sparse_vector.values.tolist()
+                    )
+                },
+                payload={
+                    "text": request.text,
+                    "document_type": request.document_type,
+                    "skills": request.skills
+                }
+            )
+        ]
+    )
+
+    return IngestResponse(
+        status="success",
+        point_id=point_id,
+        message="Candidate CV successfully indexed into Qdrant hybrid storage."
+    )
