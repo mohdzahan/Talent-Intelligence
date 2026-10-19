@@ -1,51 +1,96 @@
-import json
-import os
+import asyncio
+import time
 import httpx
-from datasets import Dataset
-from ragas import evaluate
-from ragas.metrics import context_precision, context_recall
+import os
+import pandas as pd
+from dotenv import load_dotenv
 
-def evaluate_pipeline():
+load_dotenv()
 
-    if "OPENAI_API_KEY" not in os.environ:
-        raise ValueError("You must export OPENAI_API_KEY in your terminal.")
+TALENT_API_URL = os.getenv("TALENT_API_URL", "http://localhost:8000/search")
 
-    with open("eval/qa_pairs.json", "r") as f:
-        data = json.load(f)
+# Ground-truth test dataset: queries paired with expected ideal candidate IDs
+BENCHMARK_CASES = [
+    {
+        "query": "Data Engineer with PySpark, Delta Lake, and AWS Glue pipeline experience",
+        "expected_id_snippet": "PySpark, AWS Glue, Delta Lake",
+        "category": "Data Engineering"
+    },
+    {
+        "query": "Bilingual ETL Developer fluent in Arabic and English with SQL skills",
+        "expected_id_snippet": "Bilingual Data Analyst fluent in Arabic",
+        "category": "Bilingual / Analytics"
+    },
+    {
+        "query": "Machine Learning Engineer with FastAPI, Docker, and Qdrant vector databases",
+        "expected_id_snippet": "FastAPI microservices, Qdrant vector search",
+        "category": "ML / Infrastructure"
+    },
+    {
+        "query": "AWS Solutions Architect Professional with Kubernetes and Terraform experience",
+        "expected_id_snippet": "AWS Solution Architect Professional certification",
+        "category": "Cloud Architecture"
+    }
+]
 
-    questions, ground_truths, contexts = [], [], []
-
-    print("Querying FastAPI for contexts...")
-    for item in data:
-        # Hit your live FastAPI endpoint
-        response = httpx.post(
-            "http://localhost:8000/search", 
-            json={"query": item["question"], "limit": 3},
-            timeout=10.0
-        )
-        
-        # Extract the actual text from the API response
-        retrieved_docs = [res["text"] for res in response.json()["results"]]
-        
-        questions.append(item["question"])
-        # Ragas expects ground truth to be a list of strings
-        ground_truths.append([item["ground_truth"]]) 
-        contexts.append(retrieved_docs)
-
-    # Format into a Hugging Face dataset
-    dataset = Dataset.from_dict({
-        "question": questions,
-        "contexts": contexts,
-        "ground_truth": ground_truths
-    })
-
-    print("Running RAGAS evaluation...")
-    result = evaluate(
-        dataset=dataset,
-        metrics=[context_precision, context_recall]
+async def execute_query(client: httpx.AsyncClient, query: str, rerank: bool, limit: int = 2):
+    start = time.perf_counter()
+    response = await client.post(
+        TALENT_API_URL,
+        json={"query": query, "limit": limit, "rerank": rerank}
     )
-    print("\n=== Baseline Scores ===")
-    print(result)
+    latency_ms = (time.perf_counter() - start) * 1000
+    response.raise_for_status()
+    results = response.json().get("results", [])
+    return results, latency_ms
+
+async def run_benchmark():
+    records = []
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        for case in BENCHMARK_CASES:
+            query = case["query"]
+            expected = case["expected_id_snippet"]
+            
+            # 1. Run Baseline (Dense-Only, no Cross-Encoder rerank)
+            dense_results, dense_lat = await execute_query(client, query, rerank=False)
+            dense_hit_rank = None
+            for idx, res in enumerate(dense_results):
+                if expected in res.get("text", ""):
+                    dense_hit_rank = idx + 1
+                    break
+
+            # 2. Run Hybrid + Reranker
+            rerank_results, rerank_lat = await execute_query(client, query, rerank=True)
+            rerank_hit_rank = None
+            for idx, res in enumerate(rerank_results):
+                if expected in res.get("text", ""):
+                    rerank_hit_rank = idx + 1
+                    break
+            
+            records.append({
+                "Category": case["category"],
+                "Dense Hit Rank": dense_hit_rank if dense_hit_rank else "Miss",
+                "Dense MRR": 1.0 / dense_hit_rank if dense_hit_rank else 0.0,
+                "Dense Latency (ms)": round(dense_lat, 2),
+                "Hybrid+Rerank Hit Rank": rerank_hit_rank if rerank_hit_rank else "Miss",
+                "Hybrid+Rerank MRR": 1.0 / rerank_hit_rank if rerank_hit_rank else 0.0,
+                "Hybrid Latency (ms)": round(rerank_lat, 2)
+            })
+
+    df = pd.DataFrame(records)
+    print("\n" + "=" * 80)
+    print("RETRIEVAL BENCHMARK REPORT: DENSE vs. HYBRID + CROSS-ENCODER")
+    print("=" * 80)
+    print(df.to_string(index=False))
+    
+    avg_dense_mrr = df["Dense MRR"].mean()
+    avg_hybrid_mrr = df["Hybrid+Rerank MRR"].mean()
+    print("\nSUMMARY METRICS:")
+    print(f"  Baseline Dense MRR:        {avg_dense_mrr:.3f}")
+    print(f"  Hybrid + Cross-Encoder MRR: {avg_hybrid_mrr:.3f}")
+    improvement = ((avg_hybrid_mrr - avg_dense_mrr) / avg_dense_mrr * 100) if avg_dense_mrr > 0 else 100.0
+    print(f"  MRR Improvement:           +{improvement:.1f}%")
+    print("=" * 80 + "\n")
 
 if __name__ == "__main__":
-    evaluate_pipeline()
+    asyncio.run(run_benchmark())
