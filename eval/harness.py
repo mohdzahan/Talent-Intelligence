@@ -11,25 +11,70 @@ TALENT_API_URL = os.getenv("TALENT_API_URL", "http://localhost:8000/search")
 
 # Ground-truth test dataset: queries paired with expected ideal candidate IDs
 BENCHMARK_CASES = [
+    # --- TIER 1: SEMANTIC / PARAPHRASE (Tests dense BGE-M3 understanding) ---
     {
-        "query": "Data Engineer with PySpark, Delta Lake, and AWS Glue pipeline experience",
+        "query": "Professional who designs distributed big data architectures and batch ETL flows for lakehouses",
         "expected_id_snippet": "PySpark, AWS Glue, Delta Lake",
-        "category": "Data Engineering"
+        "category": "Data Engineering (Paraphrase)",
+        "tier": "Semantic"
     },
+    {
+        "query": "Specialist in deploying scalable REST APIs for vector similarity search and self-hosted inference",
+        "expected_id_snippet": "FastAPI microservices, Qdrant vector search",
+        "category": "ML / Infrastructure (Paraphrase)",
+        "tier": "Semantic"
+    },
+
+    # --- TIER 2: HARD KEYWORD & LANGUAGE (Tests BM25 sparse matching) ---
     {
         "query": "Bilingual ETL Developer fluent in Arabic and English with SQL skills",
         "expected_id_snippet": "Bilingual Data Analyst fluent in Arabic",
-        "category": "Bilingual / Analytics"
+        "category": "Bilingual / Analytics",
+        "tier": "Keyword"
     },
     {
-        "query": "Machine Learning Engineer with FastAPI, Docker, and Qdrant vector databases",
-        "expected_id_snippet": "FastAPI microservices, Qdrant vector search",
-        "category": "ML / Infrastructure"
-    },
-    {
-        "query": "AWS Solutions Architect Professional with Kubernetes and Terraform experience",
+        "query": "Certified Cloud Solutions Architect Professional Terraform Kubernetes",
         "expected_id_snippet": "AWS Solution Architect Professional certification",
-        "category": "Cloud Architecture"
+        "category": "Cloud Architecture",
+        "tier": "Keyword"
+    },
+    {
+        "query": "Analytics Engineer specializing in dbt Core and Snowflake dimensional data modeling",
+        "expected_id_snippet": "dbt Core, Snowflake warehouse modeling",
+        "category": "Analytics Engineering",
+        "tier": "Keyword"
+    },
+
+    # --- TIER 3: HARD NEGATIVES & SPECIFIC ROLES (Tests Cross-Encoder Discrimination) ---
+    {
+        "query": "Database Administrator focused on PostgreSQL indexing, query plan optimization, and schema replication",
+        "expected_id_snippet": "Database",
+        "category": "Database Administration",
+        "tier": "Disambiguation"
+    },
+    {
+        "query": "Backend Software Engineer building distributed systems in Go or Python, excluding frontend React UI work",
+        "expected_id_snippet": "Backend",
+        "category": "Backend Engineering",
+        "tier": "Disambiguation"
+    },
+    {
+        "query": "Data Scientist developing predictive statistical models, NLP algorithms, and exploratory data analysis",
+        "expected_id_snippet": "Data Science",
+        "category": "Data Science",
+        "tier": "Disambiguation"
+    },
+    {
+        "query": "Enterprise IT Systems and Network Infrastructure Engineer managing active directory and enterprise cloud security",
+        "expected_id_snippet": "IT Infrastructure",
+        "category": "IT Operations",
+        "tier": "Domain Filter"
+    },
+    {
+        "query": "DevOps Engineer automating CI/CD deployment pipelines using Docker, Linux shell scripting, and cloud infrastructure",
+        "expected_id_snippet": "Engineering",
+        "category": "DevOps / Infrastructure",
+        "tier": "Domain Filter"
     }
 ]
 
